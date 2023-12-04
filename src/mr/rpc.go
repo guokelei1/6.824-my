@@ -21,18 +21,29 @@ type ExampleArgs struct {
 type ExampleReply struct {
 	Y int
 }
-
-type MRCallArgs struct {
-	Status   int //0:等待任务 1:完成任务
+type RegisteArgs struct {
 	WorkerID int
-	TaskID   int //完成的任务ID
 }
-
-type MRCallReply struct {
-	TaskID      int
-	TaskType    int //1 MAP 2 REDUCE 3 Wait
+type RegisteReply struct {
+	NReduce int
+	NMap    int
+}
+type GetOneTaskArgs struct {
+	WorkerID int
+}
+type GetOneTaskReply struct {
+	TaskType    int //1 MAP 2 REDUCE 3 Wait 4 Close
+	TaskID      int //MAP id或Reduce ID
 	MapFileName string
-	NReduce     int
+}
+type CommitTaskArgs struct {
+	WorkerID int
+	TaskID   int
+	TaskType int //1 MAP 2 REDUCE
+	Status   int // 0 Finish 1 Error
+}
+type CommitTaskReply struct {
+	Status int
 }
 
 // Add your RPC definitions here.

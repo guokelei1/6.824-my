@@ -2,6 +2,7 @@ package mr
 
 import (
 	"log"
+	"sync"
 	"time"
 )
 import "net"
@@ -13,6 +14,8 @@ type Coordinator struct {
 	// Your definitions here.
 	files  []string
 	status int //1:map 阶段 2:reduce 阶段
+
+	muLock sync.Mutex //互斥锁
 
 	numMapTotal int
 	//已分配的map任务数量,从0开始，下标是最新一个未分配的任务
@@ -41,6 +44,106 @@ type MapTask struct {
 	status    int //0:未分配 1:已分配 2:已完成
 	workerId  int //分配的worker id
 	timebegin int //开始时间
+}
+
+func (c *Coordinator) Registe(args *RegisteArgs, reply *RegisteReply) error {
+	reply.NReduce = c.nReduce
+	reply.NMap = c.numMapTotal
+	return nil
+}
+
+func (c *Coordinator) GetOneTask(args *GetOneTaskArgs, reply *GetOneTaskReply) error {
+	var ok bool
+	if c.status == 1 {
+		ok = c.getMapTask(args, reply)
+	} else if c.status == 2 {
+		ok = c.getReduceTask(args, reply)
+	}
+	if !ok {
+
+	}
+	return nil
+}
+
+func (c *Coordinator) getMapTask(args *GetOneTaskArgs, reply *GetOneTaskReply) bool {
+	//给c上锁
+	c.muLock.Lock()
+	defer c.muLock.Unlock()
+
+	//获取系统时间s
+	s := time.Now().Unix()
+	//分配新任务
+	if c.numMapCreated < c.numMapTotal {
+		c.mapTasks[c.numMapCreated].status = 1
+		c.mapTasks[c.numMapCreated].workerId = args.WorkerID
+		c.mapTasks[c.numMapCreated].timebegin = int(s)
+		reply.TaskType = 1
+		reply.TaskID = c.numMapCreated
+		reply.MapFileName = c.mapTasks[c.numMapCreated].fileName
+		c.numMapCreated++
+		return true
+	}
+
+	//todo：寻找失效的任务
+
+	//让worker等待
+	reply.TaskType = 3
+	return true
+}
+func (c *Coordinator) getReduceTask(args *GetOneTaskArgs, reply *GetOneTaskReply) bool {
+	//获取系统时间s
+	s := time.Now().Unix()
+	if c.numReduceCreated < c.nReduce {
+		c.reduceTasks[c.numReduceCreated].status = 1
+		c.reduceTasks[c.numReduceCreated].workerId = args.WorkerID
+		c.reduceTasks[c.numReduceCreated].timebegin = int(s)
+		reply.TaskType = 2
+		reply.TaskID = c.numReduceCreated
+		c.numReduceCreated++
+		return true
+	}
+	//需要寻找失效的任务
+	//todo：
+
+	//让worker等待
+	reply.TaskType = 3
+	return true
+
+}
+
+func (c *Coordinator) CommitTask(args *CommitTaskArgs, reply *CommitTaskReply) error {
+	taskID := args.TaskID
+	taskType := args.TaskType
+	if taskType != c.status {
+		return nil
+	}
+
+	//任务成功提交
+	if args.Status == 0 {
+		if taskType == 1 {
+			//map task
+			if c.mapTasks[taskID].status == 1 {
+				if c.mapTasks[taskID].workerId == args.WorkerID {
+					c.mapTasks[taskID].status = 2
+					c.numMapDone++
+				}
+			}
+			//map全部完成,状态流转
+			if c.numMapDone == c.numMapTotal {
+				c.status = 2
+			}
+		} else if taskType == 2 {
+			//reduce task
+			if c.reduceTasks[taskID].status == 1 {
+				if c.reduceTasks[taskID].workerId == args.WorkerID {
+					c.reduceTasks[taskID].status = 2
+					c.numReduceDone++
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // Your code here -- RPC handlers for the worker to call.

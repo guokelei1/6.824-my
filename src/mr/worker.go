@@ -2,12 +2,17 @@ package mr
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"time"
 )
 import "log"
 import "net/rpc"
 import "hash/fnv"
+
+var GlobalWorkerID int
+var NReduce int
+var NMap int
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -27,29 +32,47 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
+	GlobalWorkerID = os.Getpid()
+	ok := CallRegiste(GlobalWorkerID)
+	if !ok {
+		return
+	}
+	DPrintf("Worker get NReduce:%+v", NReduce)
 	// Your worker implementation here.
+
 	//不断循环处理
 	for {
-
-		// 每次循环先发送一个请求，根据请求结果来判断要做什么
-		args := MRCallArgs{}
-		reply := MRCallReply{}
-		//设置WorkerID为线程id
-		args.WorkerID = int(os.Getpid())
-		CallMR(&args, &reply)
-
-		if reply.TaskType == 3 {
-			time.Sleep(5 * time.Second)
+		args := GetOneTaskArgs{WorkerID: GlobalWorkerID}
+		reply := GetOneTaskReply{}
+		ok := CallGetOneTask(&args, &reply)
+		if !ok {
+			time.Sleep(1 * time.Second)
 			continue
 		}
-		if reply.TaskType == 1 {
-			//处理map相关逻辑
-		}
-		if reply.TaskType == 2 {
-			//处理reduce相关逻辑
-
-		}
+		//根绝TaskType进行不同处理
 		if reply.TaskType == 3 {
+			//wait
+			time.Sleep(5 * time.Second)
+			continue
+		} else if reply.TaskType == 1 {
+			//处理map相关逻辑
+			ok := handleMapTask(reply.TaskID, reply.MapFileName, mapf)
+			if !ok {
+				CallCommitTask(reply.TaskType, reply.TaskID, 1)
+			} else {
+				//提交任务
+				CallCommitTask(reply.TaskType, reply.TaskID, 0)
+			}
+		} else if reply.TaskType == 2 {
+			//处理reduce相关逻辑
+			ok := handleReduceTask(reply.TaskID, reducef)
+			if !ok {
+				CallCommitTask(reply.TaskType, reply.TaskID, 0)
+			} else {
+				//提交任务
+				CallCommitTask(reply.TaskType, reply.TaskID, 1)
+			}
+		} else if reply.TaskType == 4 {
 			//结束程序
 			break
 		}
@@ -58,14 +81,59 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func CallMR(args *MRCallArgs, reply *MRCallReply) {
-	ok := call("Coordinator.MRCall", args, reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
+func handleMapTask(taskid int, filename string, mapf func(string, string) []KeyValue) bool {
+	file, err := os.Open(filename)
+	if err != nil {
+		DPrintf("cannot open %v", filename)
 	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		DPrintf("cannot read %v", filename)
+	}
+	file.Close()
+	kva := mapf(filename, string(content))
+	//将kva写入中间文件
+}
+
+func handleReduceTask(taskid int, reducef func(string, []string) string) bool {
+	//读取中间文件
+	//根据key进行排序
+	//将排序后的结果写入文件
+	return false
+}
+
+// 注册WorkID 以及设置NReduce
+func CallRegiste(workerid int) bool {
+	args := &RegisteArgs{}
+	args.WorkerID = int(workerid)
+	reply := &RegisteReply{}
+	ok := call("Coordinator.Registe", &args, &reply)
+	if !ok {
+		DPrintf("call failed!\n")
+	} else {
+		NReduce = reply.NReduce
+		NMap = reply.NMap
+	}
+	return ok
+}
+
+func CallGetOneTask(args *GetOneTaskArgs, reply *GetOneTaskReply) bool {
+	return call("Coordinator.GetOneTask", args, reply)
+}
+func CallCommitTask(tasktype int, taskid int, status int) bool {
+	args := CommitTaskArgs{
+		WorkerID: GlobalWorkerID,
+		TaskID:   taskid,
+		TaskType: tasktype,
+		Status:   status,
+	}
+	reply := CommitTaskReply{}
+
+	ok := call("Coordinator.Registe", &args, &reply)
+	if !ok {
+		DPrintf("call failed!\n")
+	}
+	return ok
 }
 
 // example function to show how to make an RPC call to the coordinator.
